@@ -1,0 +1,14 @@
+[package]
+name = "kagent-cli"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+version.workspace = true
+
+[dependencies]
+kagent-core = { path = "../kagent-core" }
+kagent-ui = { path = "../kagent-ui" }
+
+[[bin]]
+name = "kagent"
+path = "src/main.rs"

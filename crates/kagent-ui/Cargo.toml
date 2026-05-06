@@ -1,0 +1,12 @@
+[package]
+name = "kagent-ui"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+version.workspace = true
+
+[dependencies]
+kagent-core = { path = "../kagent-core" }
+
+[lib]
+path = "src/lib.rs"

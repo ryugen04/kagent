@@ -1,0 +1,13 @@
+/target/
+/.local/
+/logs/
+/tmp/
+
+.codex/plans/
+.sango/agents/
+.sango/dashboard/cache/
+
+*.log
+.env
+.env.*
+!.env.example
