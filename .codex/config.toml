@@ -1,0 +1,26 @@
+# kagent project-local Codex config
+sandbox_mode = "workspace-write"
+approval_policy = "on-request"
+
+[features]
+codex_hooks = true
+shell_snapshot = true
+
+# Consumed by the AI-DLC hook dispatcher in dotfiles.
+[guardrails]
+subagent_required = true
+bootstrap_edit_paths = [
+  ".codex/config.toml",
+  ".codex/plans/**",
+  "AGENTS.md",
+]
+bootstrap_extra_commands = [
+  "cargo metadata --no-deps --format-version 1",
+  "cargo fmt --check",
+  "cargo test",
+  "cargo test -p kagent-sango",
+  "cargo test -p kagent-core",
+  "cargo test -p kagent-ui",
+  "cargo test -p kagent-cli",
+  "cargo run -p kagent-cli -- dash --snapshot",
+]

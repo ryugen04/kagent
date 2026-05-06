@@ -7,6 +7,7 @@ version.workspace = true
 
 [dependencies]
 kagent-core = { path = "../kagent-core" }
+ratatui = { version = "0.30.0", default-features = false, features = ["crossterm", "std"] }
 
 [lib]
 path = "src/lib.rs"

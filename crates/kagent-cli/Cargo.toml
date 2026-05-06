@@ -6,7 +6,9 @@ repository.workspace = true
 version.workspace = true
 
 [dependencies]
+crossterm = "0.29.0"
 kagent-core = { path = "../kagent-core" }
+kagent-sango = { path = "../kagent-sango" }
 kagent-ui = { path = "../kagent-ui" }
 
 [[bin]]

@@ -1,0 +1,131 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-05-06T12:34:56Z",
+  "project_root": "/tmp/my-product",
+  "warnings": [],
+  "project": {
+    "name": "my-product",
+    "root": "/tmp/my-product",
+    "active_worktree_set": "auth-refactor",
+    "future_project_field": "ignored"
+  },
+  "repos": [
+    {
+      "id": "repo",
+      "path": "/tmp/my-product/repo",
+      "default_branch": "main",
+      "services": [
+        "api",
+        "repo"
+      ],
+      "future_repo_field": true
+    }
+  ],
+  "services": [
+    {
+      "id": "api",
+      "repo_id": "repo",
+      "type": "process",
+      "shared": false,
+      "port_base": 3000,
+      "depends_on": [
+        "db"
+      ],
+      "future_service_field": "ignored"
+    },
+    {
+      "id": "db",
+      "type": "docker",
+      "shared": true,
+      "port_base": 5432
+    },
+    {
+      "id": "repo",
+      "repo_id": "repo",
+      "type": "process",
+      "shared": false
+    }
+  ],
+  "worktree_sets": [
+    {
+      "id": "auth-refactor",
+      "active": true,
+      "repo_worktrees": [
+        {
+          "id": "auth-refactor:repo",
+          "repo_id": "repo",
+          "worktree_set_id": "auth-refactor",
+          "path": "/tmp/my-product/worktrees/auth-refactor/repo",
+          "branch": "feature/auth-refactor",
+          "head": "abc123",
+          "exists": true,
+          "dirty": {
+            "files": 3,
+            "staged": 1,
+            "unstaged": 1,
+            "untracked": 1,
+            "future_dirty_field": 99
+          },
+          "future_repo_worktree_field": "ignored"
+        }
+      ],
+      "future_worktree_set_field": "ignored"
+    }
+  ],
+  "service_instances": [
+    {
+      "id": "auth-refactor:api",
+      "service_id": "api",
+      "repo_id": "repo",
+      "worktree_set_id": "auth-refactor",
+      "type": "process",
+      "shared": false,
+      "status": "running",
+      "health": {
+        "status": "ok",
+        "checked_at": "2026-05-06T12:35:01Z",
+        "url": "http://localhost:3100/health",
+        "future_health_field": "ignored"
+      },
+      "pid": 18302,
+      "ports": [
+        {
+          "name": "default",
+          "base": 3000,
+          "actual": 3100,
+          "url": "http://localhost:3100",
+          "open": true,
+          "future_port_field": "ignored"
+        }
+      ],
+      "depends_on": [
+        "db"
+      ],
+      "restart_count": 2,
+      "port_listening": true,
+      "process_alive": true,
+      "verified_at": "2026-05-06T12:35:01Z",
+      "future_instance_field": "ignored"
+    },
+    {
+      "id": "shared:db",
+      "service_id": "db",
+      "worktree_set_id": "shared",
+      "type": "docker",
+      "shared": true,
+      "status": "stopped",
+      "health": {
+        "status": "unchecked"
+      },
+      "ports": [
+        {
+          "name": "default",
+          "base": 5432,
+          "actual": 5432,
+          "open": false
+        }
+      ]
+    }
+  ],
+  "future_top_level_field": "ignored"
+}
