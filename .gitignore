@@ -4,8 +4,16 @@
 /tmp/
 
 .codex/plans/
+.aidlc/local/
+.aidlc/logs/
+.aidlc/runs/
+.worktrees/
+.careflow/
 .sango/agents/
 .sango/dashboard/cache/
+.sango/logs/
+.sango/pids/
+.sango/work/
 
 *.log
 .env

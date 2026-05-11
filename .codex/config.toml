@@ -3,7 +3,7 @@ sandbox_mode = "workspace-write"
 approval_policy = "on-request"
 
 [features]
-codex_hooks = true
+hooks = true
 shell_snapshot = true
 
 # Consumed by the AI-DLC hook dispatcher in dotfiles.
