@@ -1,18 +1,13 @@
 [package]
-name = "kagent-cli"
+name = "kagent-lens"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 version.workspace = true
 
 [dependencies]
-crossterm = "0.29.0"
+kagent-core = { path = "../kagent-core" }
+kagent-git = { path = "../kagent-git" }
 kagent-kitty = { path = "../kagent-kitty" }
-kagent-lens = { path = "../kagent-lens" }
 kagent-sango = { path = "../kagent-sango" }
 kagent-ui = { path = "../kagent-ui" }
-ratatui = { version = "0.30.0", default-features = false, features = ["crossterm", "std"] }
-
-[[bin]]
-name = "kagent"
-path = "src/main.rs"

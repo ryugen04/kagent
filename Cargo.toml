@@ -5,6 +5,7 @@ members = [
     "crates/kagent-core",
     "crates/kagent-git",
     "crates/kagent-kitty",
+    "crates/kagent-lens",
     "crates/kagent-sango",
     "crates/kagent-ui",
 ]

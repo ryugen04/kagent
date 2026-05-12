@@ -253,9 +253,11 @@ name = "kagent-cli"
 version = "0.1.0"
 dependencies = [
  "crossterm",
- "kagent-core",
+ "kagent-kitty",
+ "kagent-lens",
  "kagent-sango",
  "kagent-ui",
+ "ratatui",
 ]
 
 [[package]]
@@ -269,6 +271,17 @@ version = "0.1.0"
 [[package]]
 name = "kagent-kitty"
 version = "0.1.0"
+
+[[package]]
+name = "kagent-lens"
+version = "0.1.0"
+dependencies = [
+ "kagent-core",
+ "kagent-git",
+ "kagent-kitty",
+ "kagent-sango",
+ "kagent-ui",
+]
 
 [[package]]
 name = "kagent-sango"

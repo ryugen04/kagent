@@ -30,6 +30,50 @@ pub enum TrackingKind {
     Inferred,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StatusSource {
+    ExplicitEvent,
+    Adapter,
+    TerminalHeuristic,
+    ProcessState,
+    Manual,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AgentStatus {
+    pub kind: AgentStatusKind,
+    pub source: StatusSource,
+    pub confidence: f32,
+    pub since: Option<String>,
+    pub message: Option<String>,
+}
+
+impl AgentStatus {
+    pub fn certain(kind: AgentStatusKind, source: StatusSource) -> Self {
+        Self {
+            kind,
+            source,
+            confidence: 1.0,
+            since: None,
+            message: None,
+        }
+    }
+
+    pub fn uncertain(kind: AgentStatusKind, source: StatusSource, confidence: f32) -> Self {
+        Self {
+            kind,
+            source,
+            confidence,
+            since: None,
+            message: None,
+        }
+    }
+
+    pub fn is_confident(&self) -> bool {
+        self.confidence >= 0.8
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentSessionSummary {
     pub id: String,
@@ -40,6 +84,13 @@ pub struct AgentSessionSummary {
     pub tracking: TrackingKind,
     pub unread: bool,
     pub last_message: Option<String>,
+    pub source_window_id: Option<String>,
+    pub cwd: Option<String>,
+    pub is_self: bool,
+    pub is_active: bool,
+    pub status_source: StatusSource,
+    pub status_confidence_percent: u8,
+    pub status_message: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -459,7 +510,27 @@ mod tests {
             tracking: TrackingKind::Tracked,
             unread,
             last_message: None,
+            source_window_id: None,
+            cwd: None,
+            is_self: false,
+            is_active: false,
+            status_source: StatusSource::Manual,
+            status_confidence_percent: 100,
+            status_message: None,
         }
+    }
+
+    #[test]
+    fn agent_status_tracks_confidence() {
+        let status = AgentStatus::uncertain(
+            AgentStatusKind::NeedsInput,
+            StatusSource::TerminalHeuristic,
+            0.6,
+        );
+
+        assert!(!status.is_confident());
+        assert_eq!(status.kind, AgentStatusKind::NeedsInput);
+        assert_eq!(status.source, StatusSource::TerminalHeuristic);
     }
 
     #[test]

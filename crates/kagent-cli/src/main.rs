@@ -1,140 +1,31 @@
-use kagent_core::{
-    AgentContextLink, AgentLensSnapshot, AgentSessionSummary, AgentStatusKind, AttentionLevel,
-    ProjectContextSummary, RepoContextSummary, RepoDirtySummary, ServiceContextSummary,
-    ServiceHealthStatus, ServiceHealthSummary, ServicePortSummary, TrackingKind,
-    WorktreeSetSummary, WorktreeSummary,
+use kagent_kitty::{CommandKittyProvider, KittyProvider};
+use kagent_lens::{
+    LiveDashState, SANGO_SNAPSHOT_JSON, focus_selected_window, lens_snapshot_from_sango,
+    live_dash_state, refresh_selected_preview, service_health_label,
 };
-use kagent_ui::{AgentLensViewModel, render_agent_lens_text};
+use kagent_ui::{AgentLensViewModel, AgentLensWidget, render_agent_lens_text};
+use std::io::{self, IsTerminal};
 
-const SANGO_SNAPSHOT_JSON: &str = r#"
-{
-  "schema_version": 1,
-  "generated_at": "2026-05-06T12:34:56Z",
-  "project_root": "/tmp/my-product",
-  "warnings": [],
-  "project": {
-    "name": "my-product",
-    "root": "/tmp/my-product",
-    "active_worktree_set": "auth-refactor"
-  },
-  "repos": [
-    {
-      "id": "repo",
-      "path": "/tmp/my-product/repo",
-      "default_branch": "main",
-      "services": [
-        "api",
-        "repo"
-      ]
-    }
-  ],
-  "services": [
-    {
-      "id": "api",
-      "repo_id": "repo",
-      "type": "process",
-      "shared": false,
-      "port_base": 3000,
-      "depends_on": [
-        "db"
-      ]
-    },
-    {
-      "id": "db",
-      "type": "docker",
-      "shared": true,
-      "port_base": 5432
-    },
-    {
-      "id": "repo",
-      "repo_id": "repo",
-      "type": "process",
-      "shared": false
-    }
-  ],
-  "worktree_sets": [
-    {
-      "id": "auth-refactor",
-      "active": true,
-      "repo_worktrees": [
-        {
-          "id": "auth-refactor:repo",
-          "repo_id": "repo",
-          "worktree_set_id": "auth-refactor",
-          "path": "/tmp/my-product/worktrees/auth-refactor/repo",
-          "branch": "feature/auth-refactor",
-          "head": "abc123",
-          "exists": true,
-          "dirty": {
-            "files": 3,
-            "staged": 1,
-            "unstaged": 1,
-            "untracked": 1
-          }
-        }
-      ]
-    }
-  ],
-  "service_instances": [
-    {
-      "id": "auth-refactor:api",
-      "service_id": "api",
-      "repo_id": "repo",
-      "worktree_set_id": "auth-refactor",
-      "type": "process",
-      "shared": false,
-      "status": "running",
-      "health": {
-        "status": "ok",
-        "checked_at": "2026-05-06T12:35:01Z",
-        "url": "http://localhost:3100/health"
-      },
-      "pid": 18302,
-      "ports": [
-        {
-          "name": "default",
-          "base": 3000,
-          "actual": 3100,
-          "url": "http://localhost:3100",
-          "open": true
-        }
-      ],
-      "depends_on": [
-        "db"
-      ],
-      "restart_count": 2,
-      "port_listening": true,
-      "process_alive": true,
-      "verified_at": "2026-05-06T12:35:01Z"
-    },
-    {
-      "id": "shared:db",
-      "service_id": "db",
-      "worktree_set_id": "shared",
-      "type": "docker",
-      "shared": true,
-      "status": "stopped",
-      "health": {
-        "status": "unchecked"
-      },
-      "ports": [
-        {
-          "name": "default",
-          "base": 5432,
-          "actual": 5432,
-          "open": false
-        }
-      ]
-    }
-  ]
-}
-"#;
+use crossterm::{
+    event::{self, Event, KeyCode, KeyModifiers},
+    execute,
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
+};
+use ratatui::{Terminal, backend::CrosstermBackend};
 
 fn main() {
-    match command_output(&std::env::args().skip(1).collect::<Vec<_>>()) {
-        Ok(output) => {
-            print!("{output}");
+    let args = std::env::args().skip(1).collect::<Vec<_>>();
+
+    if is_interactive_dash(&args) {
+        if let Err(message) = run_dash_interactive() {
+            eprintln!("{message}");
+            std::process::exit(2);
         }
+        return;
+    }
+
+    match command_output(&args) {
+        Ok(output) => print!("{output}"),
         Err(message) => {
             eprintln!("{message}");
             std::process::exit(2);
@@ -148,10 +39,8 @@ fn command_output(args: &[String]) -> Result<String, String> {
 
     match command {
         "dash" => dash_output(flags),
-        "context" => {
-            reject_flags("context", flags)?;
-            Ok("kagent context skeleton\n".to_owned())
-        }
+        "quick-access" => quick_access_output(flags),
+        "context" => context_output(flags),
         _ => Err(format!("unknown command: {command}")),
     }
 }
@@ -164,6 +53,80 @@ fn dash_output(flags: &[String]) -> Result<String, String> {
     }
 }
 
+fn is_interactive_dash(args: &[String]) -> bool {
+    args.is_empty() || matches!(args, [command] if command == "dash" || command == "quick-access")
+}
+
+fn quick_access_output(flags: &[String]) -> Result<String, String> {
+    match flags {
+        [] => Ok("kagent quick-access opens the live Agent Lens TUI\n".to_owned()),
+        [flag, ..] => Err(format!("unknown quick-access flag: {flag}")),
+    }
+}
+
+fn run_dash_interactive() -> Result<(), String> {
+    let provider = CommandKittyProvider::default();
+    let mut state = live_dash_state(&provider)?;
+
+    if !io::stdout().is_terminal() {
+        refresh_selected_preview(&provider, &mut state.model);
+        print!("{}", render_agent_lens_text(&state.model));
+        return Ok(());
+    }
+
+    enable_raw_mode().map_err(|error| error.to_string())?;
+    let mut stdout = io::stdout();
+    execute!(stdout, EnterAlternateScreen).map_err(|error| error.to_string())?;
+
+    let result = run_terminal_loop(&provider, &mut state);
+
+    disable_raw_mode().map_err(|error| error.to_string())?;
+    execute!(io::stdout(), LeaveAlternateScreen).map_err(|error| error.to_string())?;
+
+    result
+}
+
+fn run_terminal_loop(
+    provider: &impl KittyProvider,
+    state: &mut LiveDashState,
+) -> Result<(), String> {
+    let backend = CrosstermBackend::new(io::stdout());
+    let mut terminal = Terminal::new(backend).map_err(|error| error.to_string())?;
+
+    loop {
+        refresh_selected_preview(provider, &mut state.model);
+        terminal
+            .draw(|frame| {
+                frame.render_widget(AgentLensWidget::new(&state.model), frame.area());
+            })
+            .map_err(|error| error.to_string())?;
+
+        if let Event::Key(key) = event::read().map_err(|error| error.to_string())? {
+            match key.code {
+                KeyCode::Char('q') => break,
+                KeyCode::Char('j') | KeyCode::Down => state.model.select_next(),
+                KeyCode::Char('k') | KeyCode::Up => state.model.select_previous(),
+                KeyCode::Tab => state.model.cycle_preview_mode(),
+                KeyCode::Right | KeyCode::Char('l') => state.model.focus_next_pane(),
+                KeyCode::PageDown => state.model.scroll_preview_page_down(),
+                KeyCode::PageUp => state.model.scroll_preview_page_up(),
+                KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    state.model.scroll_preview_half_page_down()
+                }
+                KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    state.model.scroll_preview_half_page_up()
+                }
+                KeyCode::Char('g') => state.model.scroll_preview_top(),
+                KeyCode::Char('G') => state.model.scroll_preview_bottom(),
+                KeyCode::Enter => focus_selected_window(provider, state)?,
+                _ => {}
+            }
+        }
+    }
+
+    Ok(())
+}
+
 fn snapshot_output() -> Result<String, String> {
     let snapshot =
         kagent_sango::parse_snapshot_str(SANGO_SNAPSHOT_JSON).map_err(|error| error.to_string())?;
@@ -173,174 +136,58 @@ fn snapshot_output() -> Result<String, String> {
     Ok(render_agent_lens_text(&model))
 }
 
-fn reject_flags(command: &str, flags: &[String]) -> Result<(), String> {
-    if let Some(flag) = flags.first() {
-        Err(format!("unknown {command} flag: {flag}"))
-    } else {
-        Ok(())
+fn context_output(flags: &[String]) -> Result<String, String> {
+    match flags {
+        [] => context_markdown_output(),
+        [flag] if flag == "--markdown" => context_markdown_output(),
+        [flag, ..] => Err(format!("unknown context flag: {flag}")),
     }
 }
 
-fn lens_snapshot_from_sango(snapshot: &kagent_sango::Snapshot) -> AgentLensSnapshot {
-    AgentLensSnapshot {
-        project: project_context_from_sango(snapshot),
-        sessions: mock_agent_sessions(),
-        agent_contexts: mock_agent_contexts(snapshot),
+fn context_markdown_output() -> Result<String, String> {
+    let snapshot =
+        kagent_sango::parse_snapshot_str(SANGO_SNAPSHOT_JSON).map_err(|error| error.to_string())?;
+    let lens_snapshot = lens_snapshot_from_sango(&snapshot);
+    let mut output = String::new();
+
+    output.push_str(&format!("# Project: {}\n\n", lens_snapshot.project.name));
+    output.push_str(&format!("Root: {}\n\n", lens_snapshot.project.root));
+    output.push_str(&format!(
+        "Active worktree set: {}\n\n",
+        lens_snapshot
+            .project
+            .active_worktree_set_id
+            .as_deref()
+            .unwrap_or("-")
+    ));
+
+    output.push_str("## Repos\n");
+    for repo in &lens_snapshot.project.repos {
+        output.push_str(&format!(
+            "- {}: {}, dirty {} files\n",
+            repo.repo_id,
+            repo.branch.as_deref().unwrap_or("-"),
+            repo.dirty.changed_files()
+        ));
     }
-}
 
-fn project_context_from_sango(snapshot: &kagent_sango::Snapshot) -> ProjectContextSummary {
-    ProjectContextSummary {
-        name: snapshot.project.name.clone(),
-        root: snapshot.project.root.clone(),
-        active_worktree_set_id: Some(snapshot.project.active_worktree_set.clone()),
-        worktree_sets: snapshot
-            .worktree_sets
-            .iter()
-            .map(|worktree_set| WorktreeSetSummary {
-                id: worktree_set.id.clone(),
-                active: worktree_set.active,
-                worktrees: worktree_set
-                    .repo_worktrees
-                    .iter()
-                    .map(|worktree| WorktreeSummary {
-                        id: worktree.id.clone(),
-                        repo_id: worktree.repo_id.clone(),
-                        worktree_set_id: worktree.worktree_set_id.clone(),
-                        path: worktree.path.clone(),
-                        branch: worktree.branch.clone(),
-                        head: worktree.head.clone(),
-                        exists: worktree.exists,
-                    })
-                    .collect(),
-            })
-            .collect(),
-        repos: repo_contexts_from_sango(snapshot),
-        services: snapshot
-            .service_instances
-            .iter()
-            .map(service_context_from_sango)
-            .collect(),
-    }
-}
-
-fn repo_contexts_from_sango(snapshot: &kagent_sango::Snapshot) -> Vec<RepoContextSummary> {
-    snapshot
-        .worktree_sets
-        .iter()
-        .flat_map(|worktree_set| {
-            worktree_set.repo_worktrees.iter().map(|worktree| {
-                let repo = snapshot
-                    .repos
-                    .iter()
-                    .find(|repo| repo.id == worktree.repo_id);
-
-                RepoContextSummary {
-                    repo_id: worktree.repo_id.clone(),
-                    worktree_id: Some(worktree.id.clone()),
-                    worktree_set_id: Some(worktree.worktree_set_id.clone()),
-                    path: worktree.path.clone(),
-                    default_branch: repo.map(|repo| repo.default_branch.clone()),
-                    branch: worktree.branch.clone(),
-                    head: worktree.head.clone(),
-                    exists: worktree.exists,
-                    service_ids: repo
-                        .map(|repo| repo.services.clone())
-                        .unwrap_or_else(Vec::new),
-                    dirty: RepoDirtySummary {
-                        files: worktree.dirty.files,
-                        staged: worktree.dirty.staged,
-                        unstaged: worktree.dirty.unstaged,
-                        untracked: worktree.dirty.untracked,
-                    },
-                }
-            })
-        })
-        .collect()
-}
-
-fn service_context_from_sango(instance: &kagent_sango::ServiceInstance) -> ServiceContextSummary {
-    ServiceContextSummary {
-        service_id: instance.service_id.clone(),
-        instance_id: Some(instance.id.clone()),
-        repo_id: instance.repo_id.clone(),
-        worktree_set_id: Some(instance.worktree_set_id.clone()),
-        service_type: instance.service_type.clone(),
-        shared: instance.shared,
-        status: instance.status.clone(),
-        health: ServiceHealthSummary {
-            status: service_health_status(&instance.health.status),
-            checked_at: instance.health.checked_at.clone(),
-            url: instance.health.url.clone(),
-            last_error: instance.health.last_error.clone(),
-        },
-        ports: instance
+    output.push_str("\n## Services\n");
+    for service in &lens_snapshot.project.services {
+        let port = service
             .ports
-            .iter()
-            .map(|port| ServicePortSummary {
-                name: port.name.clone(),
-                base: port.base,
-                actual: port.actual,
-                url: port.url.clone(),
-                open: port.open,
-            })
-            .collect(),
+            .first()
+            .map(|port| port.actual.to_string())
+            .unwrap_or_else(|| "-".to_owned());
+        output.push_str(&format!(
+            "- {}: {}, health {}, port {}\n",
+            service.service_id,
+            service.status,
+            service_health_label(service.health.status),
+            port
+        ));
     }
-}
 
-fn mock_agent_sessions() -> Vec<AgentSessionSummary> {
-    vec![
-        AgentSessionSummary {
-            id: "worker-3".to_owned(),
-            agent_kind: "codex".to_owned(),
-            session_name: "Worker 3".to_owned(),
-            status: AgentStatusKind::NeedsApproval,
-            attention: AttentionLevel::NeedsUser,
-            tracking: TrackingKind::Tracked,
-            unread: true,
-            last_message: Some("Snapshot renderer ready for verification.".to_owned()),
-        },
-        AgentSessionSummary {
-            id: "reviewer".to_owned(),
-            agent_kind: "codex".to_owned(),
-            session_name: "Reviewer".to_owned(),
-            status: AgentStatusKind::Running,
-            attention: AttentionLevel::Info,
-            tracking: TrackingKind::Inferred,
-            unread: false,
-            last_message: Some("Watching the Agent Lens context.".to_owned()),
-        },
-    ]
-}
-
-fn mock_agent_contexts(snapshot: &kagent_sango::Snapshot) -> Vec<AgentContextLink> {
-    let active_worktree_set = snapshot.project.active_worktree_set.clone();
-    let repo_ids = snapshot
-        .repos
-        .iter()
-        .map(|repo| repo.id.clone())
-        .collect::<Vec<_>>();
-    let service_ids = snapshot
-        .services
-        .iter()
-        .map(|service| service.id.clone())
-        .collect::<Vec<_>>();
-
-    vec![AgentContextLink {
-        session_id: "worker-3".to_owned(),
-        worktree_set_id: Some(active_worktree_set),
-        repo_ids,
-        service_ids,
-    }]
-}
-
-fn service_health_status(status: &str) -> ServiceHealthStatus {
-    match status {
-        "ok" | "healthy" | "pass" | "passing" => ServiceHealthStatus::Healthy,
-        "degraded" | "warn" | "warning" => ServiceHealthStatus::Degraded,
-        "unhealthy" | "fail" | "failed" | "error" => ServiceHealthStatus::Unhealthy,
-        _ => ServiceHealthStatus::Unknown,
-    }
+    Ok(output)
 }
 
 #[cfg(test)]
@@ -375,5 +222,25 @@ mod tests {
             command_output(&["dash".to_owned(), "--live".to_owned()]).expect_err("unknown flag");
 
         assert_eq!(error, "unknown dash flag: --live");
+    }
+
+    #[test]
+    fn quick_access_has_stable_non_tty_description() {
+        let output = command_output(&["quick-access".to_owned()]).expect("quick-access output");
+
+        assert_eq!(
+            output,
+            "kagent quick-access opens the live Agent Lens TUI\n"
+        );
+    }
+
+    #[test]
+    fn context_markdown_uses_sango_fixture_context() {
+        let output = command_output(&["context".to_owned(), "--markdown".to_owned()])
+            .expect("context output");
+
+        assert!(output.contains("# Project: my-product"));
+        assert!(output.contains("- repo: feature/auth-refactor, dirty 3 files"));
+        assert!(output.contains("- api: running, health healthy, port 3100"));
     }
 }
