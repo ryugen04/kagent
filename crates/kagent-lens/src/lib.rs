@@ -10,6 +10,7 @@ use kagent_kitty::{
 };
 use kagent_ui::{AgentLensRepoView, AgentLensTabView, AgentLensViewModel, AgentLensWindowView};
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
 
 pub const SANGO_SNAPSHOT_JSON: &str = r#"
 {
@@ -305,6 +306,7 @@ fn live_project_context(tabs: &[KittyTab], fallback_root: Option<&str>) -> Proje
         }
     }
     let root = active_window_cwd(tabs)
+        .and_then(|cwd| detect_project_root_from_cwd(&cwd).or(Some(cwd)))
         .or_else(|| fallback_root.map(str::to_owned))
         .or_else(current_project_root)
         .unwrap_or_else(|| ".".to_owned());
@@ -408,12 +410,24 @@ fn repo_view(repo: RepoSummary) -> AgentLensRepoView {
 fn active_window_cwd(tabs: &[KittyTab]) -> Option<String> {
     tabs.iter()
         .flat_map(|tab| tab.windows.iter())
-        .find(|window| window.is_self)
+        .find(|window| window.is_active && !window.is_self)
         .and_then(normalized_window_cwd)
         .or_else(|| {
             tabs.iter()
                 .flat_map(|tab| tab.windows.iter())
+                .find(|window| !window.is_self)
+                .and_then(normalized_window_cwd)
+        })
+        .or_else(|| {
+            tabs.iter()
+                .flat_map(|tab| tab.windows.iter())
                 .find(|window| window.is_active)
+                .and_then(normalized_window_cwd)
+        })
+        .or_else(|| {
+            tabs.iter()
+                .flat_map(|tab| tab.windows.iter())
+                .find(|window| window.is_self)
                 .and_then(normalized_window_cwd)
         })
 }
@@ -440,6 +454,24 @@ fn current_project_root() -> Option<String> {
     std::env::current_dir()
         .ok()
         .map(|path| path.to_string_lossy().into_owned())
+}
+
+fn detect_project_root_from_cwd(cwd: &str) -> Option<String> {
+    let path = Path::new(cwd);
+    let marker = find_project_marker_ancestor(path)?;
+    Some(marker.to_string_lossy().into_owned())
+}
+
+fn find_project_marker_ancestor(path: &Path) -> Option<PathBuf> {
+    path.ancestors().find_map(|ancestor| {
+        let has_sango = ancestor.join("sango.yaml").exists();
+        let has_workspace = ancestor.join("workspace.yaml").exists();
+        if has_sango || has_workspace {
+            Some(ancestor.to_path_buf())
+        } else {
+            None
+        }
+    })
 }
 
 pub fn refresh_selected_preview(provider: &impl KittyScreenReader, model: &mut AgentLensViewModel) {
