@@ -47,7 +47,7 @@ fn command_output(args: &[String]) -> Result<String, String> {
 
 fn dash_output(flags: &[String]) -> Result<String, String> {
     match flags {
-        [] => Ok("kagent dashboard skeleton\n".to_owned()),
+        [] => Ok("kagent dash opens the live Agent Lens TUI\n".to_owned()),
         [flag] if flag == "--snapshot" => snapshot_output(),
         [flag, ..] => Err(format!("unknown dash flag: {flag}")),
     }
@@ -195,10 +195,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn dash_without_snapshot_keeps_skeleton_output() {
+    fn dash_without_snapshot_describes_live_tui() {
         let output = command_output(&["dash".to_owned()]).expect("dash output");
 
-        assert_eq!(output, "kagent dashboard skeleton\n");
+        assert_eq!(output, "kagent dash opens the live Agent Lens TUI\n");
     }
 
     #[test]

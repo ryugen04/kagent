@@ -1,5 +1,3 @@
-use std::collections::BTreeSet;
-
 use kagent_core::{
     AgentContextLink, AgentLensSnapshot, AgentSessionSummary, AgentStatusKind, AttentionLevel,
     ProjectContextSummary, RepoContextSummary, RepoDirtySummary, ServiceContextSummary,
@@ -11,6 +9,7 @@ use kagent_kitty::{
     KittyFocuser, KittyScreenReader, KittyTab, KittyTabLister, KittyWindow, classify_window,
 };
 use kagent_ui::{AgentLensRepoView, AgentLensTabView, AgentLensViewModel, AgentLensWindowView};
+use std::collections::{BTreeMap, BTreeSet};
 
 pub const SANGO_SNAPSHOT_JSON: &str = r#"
 {
@@ -158,37 +157,48 @@ pub fn live_dash_state(provider: &impl KittyTabLister) -> Result<LiveDashState, 
                 model: AgentLensViewModel::from_live_snapshot(snapshot, live_tabs),
             })
         }
-        Err(error) => fallback_dash_state(&error),
+        Err(error) => Ok(unavailable_dash_state(&error)),
     }
 }
 
-pub fn fallback_dash_state(reason: &str) -> Result<LiveDashState, String> {
-    let snapshot =
-        kagent_sango::parse_snapshot_str(SANGO_SNAPSHOT_JSON).map_err(|error| error.to_string())?;
-    let mut lens_snapshot = lens_snapshot_from_sango(&snapshot);
-    lens_snapshot.project.name = format!(
-        "{} (fixture fallback: {reason})",
-        lens_snapshot.project.name
-    );
-
-    Ok(LiveDashState {
-        model: AgentLensViewModel::from_snapshot(lens_snapshot),
+pub fn unavailable_dash_state(reason: &str) -> LiveDashState {
+    let root = current_project_root();
+    let project = live_project_context(&[], root.as_deref());
+    LiveDashState {
+        model: AgentLensViewModel::from_snapshot(AgentLensSnapshot {
+            project,
+            sessions: vec![AgentSessionSummary {
+                id: "provider:error".to_owned(),
+                agent_kind: "kitty".to_owned(),
+                session_name: "kitty unavailable".to_owned(),
+                status: AgentStatusKind::Failed,
+                attention: AttentionLevel::Error,
+                tracking: TrackingKind::Inferred,
+                unread: true,
+                last_message: Some(reason.to_owned()),
+                source_window_id: None,
+                cwd: root,
+                is_self: false,
+                is_active: false,
+                status_source: StatusSource::ProcessState,
+                status_confidence_percent: 100,
+                status_message: Some("kitty remote control could not be queried".to_owned()),
+            }],
+            agent_contexts: Vec::new(),
+        }),
         self_session_ids: BTreeSet::new(),
-    })
+    }
 }
 
 pub fn live_lens_snapshot(tabs: &[KittyTab]) -> AgentLensSnapshot {
-    let snapshot =
-        kagent_sango::parse_snapshot_str(SANGO_SNAPSHOT_JSON).expect("embedded snapshot is valid");
-
     AgentLensSnapshot {
-        project: project_context_from_sango(&snapshot),
+        project: live_project_context(tabs, None),
         sessions: tabs
             .iter()
             .flat_map(|tab| tab.windows.iter().cloned())
             .map(session_from_kitty_window)
             .collect(),
-        agent_contexts: Vec::new(),
+        agent_contexts: live_agent_contexts(tabs),
     }
 }
 
@@ -206,7 +216,7 @@ pub fn live_tab_views(tabs: &[KittyTab]) -> Vec<AgentLensTabView> {
                     session_id: kitty_session_id(window),
                     window_id: window.id.clone(),
                     title: window.title.clone(),
-                    cwd: window.cwd.clone(),
+                    cwd: normalized_window_cwd(window),
                     kind: classify_window(window).label().to_owned(),
                     is_active: window.is_active,
                     is_self: window.is_self,
@@ -215,11 +225,10 @@ pub fn live_tab_views(tabs: &[KittyTab]) -> Vec<AgentLensTabView> {
                     } else {
                         window.foreground_cmdline.clone()
                     },
-                    repos: window
-                        .cwd
-                        .as_deref()
-                        .map(|cwd| repo_views(git_provider.discover_repo_summaries(cwd)))
-                        .unwrap_or_default(),
+                    repos: discover_window_repos(&git_provider, window)
+                        .into_iter()
+                        .map(repo_view)
+                        .collect(),
                 })
                 .collect(),
         })
@@ -227,16 +236,7 @@ pub fn live_tab_views(tabs: &[KittyTab]) -> Vec<AgentLensTabView> {
 }
 
 pub fn repo_views(repos: Vec<RepoSummary>) -> Vec<AgentLensRepoView> {
-    repos
-        .into_iter()
-        .map(|repo| AgentLensRepoView {
-            id: repo.id,
-            path: repo.path,
-            branch: repo.branch,
-            dirty_files: repo.dirty_files,
-            pr: None,
-        })
-        .collect()
+    repos.into_iter().map(repo_view).collect()
 }
 
 pub fn session_from_kitty_window(window: KittyWindow) -> AgentSessionSummary {
@@ -261,7 +261,7 @@ pub fn session_from_kitty_window(window: KittyWindow) -> AgentSessionSummary {
     });
 
     let source_window_id = Some(window.id.clone());
-    let cwd = window.cwd.clone();
+    let cwd = normalized_window_cwd(&window);
     let is_self = window.is_self;
     let is_active = window.is_active;
 
@@ -292,6 +292,154 @@ pub fn session_from_kitty_window(window: KittyWindow) -> AgentSessionSummary {
         status_confidence_percent,
         status_message,
     }
+}
+
+fn live_project_context(tabs: &[KittyTab], fallback_root: Option<&str>) -> ProjectContextSummary {
+    let git_provider = GitCommandProvider;
+    let mut repos = collect_live_repos(&git_provider, tabs);
+    if repos.is_empty() {
+        if let Some(root) = fallback_root {
+            for repo in git_provider.discover_repo_summaries(root) {
+                repos.entry(repo.path.clone()).or_insert(repo);
+            }
+        }
+    }
+    let root = active_window_cwd(tabs)
+        .or_else(|| fallback_root.map(str::to_owned))
+        .or_else(current_project_root)
+        .unwrap_or_else(|| ".".to_owned());
+    let name = cwd_basename(&root).unwrap_or("kagent").to_owned();
+    let worktree_set_id = "live".to_owned();
+
+    ProjectContextSummary {
+        name,
+        root,
+        active_worktree_set_id: Some(worktree_set_id.clone()),
+        worktree_sets: vec![WorktreeSetSummary {
+            id: worktree_set_id.clone(),
+            active: true,
+            worktrees: repos
+                .values()
+                .map(|repo| WorktreeSummary {
+                    id: format!("live:{}", repo.id),
+                    repo_id: repo.id.clone(),
+                    worktree_set_id: worktree_set_id.clone(),
+                    path: repo.path.clone(),
+                    branch: repo.branch.clone(),
+                    head: None,
+                    exists: true,
+                })
+                .collect(),
+        }],
+        repos: repos
+            .values()
+            .map(|repo| RepoContextSummary {
+                repo_id: repo.id.clone(),
+                worktree_id: Some(format!("live:{}", repo.id)),
+                worktree_set_id: Some(worktree_set_id.clone()),
+                path: repo.path.clone(),
+                default_branch: None,
+                branch: repo.branch.clone(),
+                head: None,
+                exists: true,
+                service_ids: Vec::new(),
+                dirty: RepoDirtySummary {
+                    files: repo.dirty_files as u32,
+                    staged: 0,
+                    unstaged: 0,
+                    untracked: 0,
+                },
+            })
+            .collect(),
+        services: Vec::new(),
+    }
+}
+
+fn live_agent_contexts(tabs: &[KittyTab]) -> Vec<AgentContextLink> {
+    let git_provider = GitCommandProvider;
+    tabs.iter()
+        .flat_map(|tab| tab.windows.iter())
+        .map(|window| AgentContextLink {
+            session_id: kitty_session_id(window),
+            worktree_set_id: Some("live".to_owned()),
+            repo_ids: discover_window_repos(&git_provider, window)
+                .into_iter()
+                .map(|repo| repo.id)
+                .collect(),
+            service_ids: Vec::new(),
+        })
+        .collect()
+}
+
+fn collect_live_repos(
+    git_provider: &GitCommandProvider,
+    tabs: &[KittyTab],
+) -> BTreeMap<String, RepoSummary> {
+    let mut repos = BTreeMap::new();
+    for repo in tabs
+        .iter()
+        .flat_map(|tab| tab.windows.iter())
+        .flat_map(|window| discover_window_repos(git_provider, window))
+    {
+        repos.entry(repo.path.clone()).or_insert(repo);
+    }
+    repos
+}
+
+fn discover_window_repos(
+    git_provider: &GitCommandProvider,
+    window: &KittyWindow,
+) -> Vec<RepoSummary> {
+    normalized_window_cwd(window)
+        .map(|cwd| git_provider.discover_repo_summaries(&cwd))
+        .unwrap_or_default()
+}
+
+fn repo_view(repo: RepoSummary) -> AgentLensRepoView {
+    AgentLensRepoView {
+        id: repo.id,
+        path: repo.path,
+        branch: repo.branch,
+        dirty_files: repo.dirty_files,
+        pr: None,
+    }
+}
+
+fn active_window_cwd(tabs: &[KittyTab]) -> Option<String> {
+    tabs.iter()
+        .flat_map(|tab| tab.windows.iter())
+        .find(|window| window.is_self)
+        .and_then(normalized_window_cwd)
+        .or_else(|| {
+            tabs.iter()
+                .flat_map(|tab| tab.windows.iter())
+                .find(|window| window.is_active)
+                .and_then(normalized_window_cwd)
+        })
+}
+
+fn normalized_window_cwd(window: &KittyWindow) -> Option<String> {
+    window.cwd.as_deref().map(normalize_cwd)
+}
+
+fn normalize_cwd(cwd: &str) -> String {
+    let Some(rest) = cwd.strip_prefix("file://") else {
+        return cwd.to_owned();
+    };
+
+    if rest.starts_with('/') {
+        rest.to_owned()
+    } else {
+        rest.find('/')
+            .map(|index| rest[index..].to_owned())
+            .unwrap_or_else(|| rest.to_owned())
+    }
+}
+
+fn current_project_root() -> Option<String> {
+    std::env::current_dir()
+        .ok()
+        .map(|path| path.to_string_lossy().into_owned())
 }
 
 pub fn refresh_selected_preview(provider: &impl KittyScreenReader, model: &mut AgentLensViewModel) {
@@ -766,21 +914,57 @@ mod tests {
     }
 
     #[test]
-    fn live_provider_failure_falls_back_to_fixture_with_reason() {
-        let state = live_dash_state(&FailingLister).expect("fallback state");
+    fn live_provider_failure_reports_error_without_fixture_sessions() {
+        let state = live_dash_state(&FailingLister).expect("error state");
 
+        assert_eq!(state.model.snapshot.sessions.len(), 1);
+        let session = &state.model.snapshot.sessions[0];
+        assert_eq!(session.id, "provider:error");
+        assert_eq!(session.status, AgentStatusKind::Failed);
+        assert_eq!(session.attention, AttentionLevel::Error);
+        assert_eq!(session.last_message.as_deref(), Some("kitty unavailable"));
         assert!(
-            state
+            !state
                 .model
                 .snapshot
-                .project
-                .name
-                .contains("fixture fallback: kitty unavailable")
+                .sessions
+                .iter()
+                .any(|session| session.id == "worker-3")
         );
+    }
+
+    #[test]
+    fn live_snapshot_uses_kitty_windows_without_fixture_sessions() {
+        let tabs = vec![KittyTab {
+            id: "1".to_owned(),
+            title: "live".to_owned(),
+            is_active: true,
+            windows: vec![KittyWindow {
+                id: "21".to_owned(),
+                title: "kagent".to_owned(),
+                cwd: Some("file://host/workspace/kagent".to_owned()),
+                cmdline: vec!["bash".to_owned()],
+                foreground_cmdline: vec!["codex".to_owned()],
+                is_self: true,
+                is_active: true,
+                screen_text: None,
+            }],
+        }];
+
+        let snapshot = live_lens_snapshot(&tabs);
+
+        assert_eq!(snapshot.project.name, "kagent");
+        assert_eq!(snapshot.project.root, "/workspace/kagent");
+        assert_eq!(snapshot.sessions.len(), 1);
+        assert_eq!(snapshot.sessions[0].id, "kitty:21");
+        assert_eq!(
+            snapshot.sessions[0].cwd.as_deref(),
+            Some("/workspace/kagent")
+        );
+        assert_eq!(snapshot.agent_contexts.len(), 1);
+        assert_eq!(snapshot.agent_contexts[0].session_id, "kitty:21");
         assert!(
-            state
-                .model
-                .snapshot
+            !snapshot
                 .sessions
                 .iter()
                 .any(|session| session.id == "worker-3")
