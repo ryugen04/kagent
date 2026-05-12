@@ -118,7 +118,10 @@ fn run_terminal_loop(
                 }
                 KeyCode::Char('g') => state.model.scroll_preview_top(),
                 KeyCode::Char('G') => state.model.scroll_preview_bottom(),
-                KeyCode::Enter => focus_selected_window(provider, state)?,
+                KeyCode::Enter => {
+                    focus_selected_window(provider, state)?;
+                    break;
+                }
                 _ => {}
             }
         }

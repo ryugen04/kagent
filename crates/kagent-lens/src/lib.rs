@@ -145,16 +145,10 @@ pub struct LiveDashState {
 pub fn live_dash_state(provider: &impl KittyTabLister) -> Result<LiveDashState, String> {
     match provider.list_tabs() {
         Ok(tabs) => {
-            let self_session_ids = tabs
-                .iter()
-                .flat_map(|tab| tab.windows.iter())
-                .filter(|window| window.is_self)
-                .map(kitty_session_id)
-                .collect();
             let snapshot = live_lens_snapshot(&tabs);
             let live_tabs = live_tab_views(&tabs);
             Ok(LiveDashState {
-                self_session_ids,
+                self_session_ids: BTreeSet::new(),
                 model: AgentLensViewModel::from_live_snapshot(snapshot, live_tabs),
             })
         }

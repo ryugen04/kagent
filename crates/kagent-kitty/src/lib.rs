@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 use std::process::Command;
+use std::{fs, path::Path};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KittyWindow {
@@ -65,6 +66,8 @@ impl<T> KittyProvider for T where T: KittyWindowLister + KittyScreenReader + Kit
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandKittyProvider {
     program: String,
+    remote_target: Option<String>,
+    snapshot_json: Option<String>,
 }
 
 impl CommandKittyProvider {
@@ -80,14 +83,45 @@ impl CommandKittyProvider {
     }
 
     pub fn new(program: impl Into<String>) -> Self {
+        let snapshot_json = std::env::var("KAGENT_KITTY_LS_JSON")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .or_else(|| {
+                std::env::var("KAGENT_KITTY_LS_JSON_PATH")
+                    .ok()
+                    .filter(|value| !value.trim().is_empty())
+                    .and_then(|path| read_snapshot_file(&path))
+            });
+
         Self {
             program: program.into(),
+            remote_target: std::env::var("KAGENT_KITTY_TO")
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+                .or_else(|| {
+                    std::env::var("KITTY_LISTEN_ON")
+                        .ok()
+                        .filter(|value| !value.trim().is_empty())
+                }),
+            snapshot_json,
         }
     }
 
     fn run(&self, args: &[&str]) -> Result<String, String> {
-        let output = Command::new(&self.program)
-            .args(args)
+        let mut command = Command::new(&self.program);
+        if let Some(target) = self.remote_target.as_deref() {
+            if let Some((first, rest)) = args.split_first() {
+                if *first == "@" {
+                    command.arg("@").arg("--to").arg(target).args(rest);
+                } else {
+                    command.args(args);
+                }
+            }
+        } else {
+            command.args(args);
+        }
+
+        let output = command
             .output()
             .map_err(|error| format!("failed to run {}: {error}", self.program))?;
 
@@ -105,6 +139,16 @@ impl CommandKittyProvider {
     }
 }
 
+fn read_snapshot_file(path: &str) -> Option<String> {
+    let file = Path::new(path);
+    if !file.exists() {
+        return None;
+    }
+    fs::read_to_string(file)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+}
+
 impl Default for CommandKittyProvider {
     fn default() -> Self {
         Self::new(Self::default_program())
@@ -113,12 +157,18 @@ impl Default for CommandKittyProvider {
 
 impl KittyWindowLister for CommandKittyProvider {
     fn list_windows(&self) -> Result<Vec<KittyWindow>, String> {
+        if let Some(snapshot) = self.snapshot_json.as_deref() {
+            return parse_kitty_windows_json(snapshot);
+        }
         parse_kitty_windows_json(&self.run(&["@", "ls"])?)
     }
 }
 
 impl KittyTabLister for CommandKittyProvider {
     fn list_tabs(&self) -> Result<Vec<KittyTab>, String> {
+        if let Some(snapshot) = self.snapshot_json.as_deref() {
+            return parse_kitty_tabs_json(snapshot);
+        }
         parse_kitty_tabs_json(&self.run(&["@", "ls"])?)
     }
 }
@@ -134,6 +184,13 @@ impl KittyFocuser for CommandKittyProvider {
     fn focus_window(&self, window_id: &str) -> Result<(), String> {
         let matcher = format!("id:{window_id}");
         self.run(&["@", "focus-window", "--match", &matcher])?;
+        self.run(&[
+            "@",
+            "resize-os-window",
+            "--action=show",
+            "--match",
+            &matcher,
+        ])?;
         Ok(())
     }
 }
